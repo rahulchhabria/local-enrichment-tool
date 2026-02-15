@@ -3,12 +3,14 @@ dotenv.config();
 
 import * as Sentry from '@sentry/node';
 
-Sentry.init({
-  dsn: process.env.SENTRY_DSN,
-  environment: process.env.NODE_ENV || 'development',
-  tracesSampleRate: 1.0,
-  enableLogs: true,
-});
+// Initialize Sentry only if DSN is configured
+if (process.env.SENTRY_DSN) {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    environment: process.env.NODE_ENV || 'development',
+    tracesSampleRate: 1.0,
+  });
+}
 
 import express from 'express';
 import { CompanyEnrichmentEngine } from './lib/enrichment-engine.js';
@@ -43,23 +45,26 @@ app.post('/api/enrich', async (req, res) => {
   }
 
   try {
-    Sentry.logger.info('Enrichment request received', { domainCount: domains.length, domains: domains.join(', ') });
+    if (process.env.SENTRY_DSN) {
+      Sentry.getCurrentScope().setContext('enrichment', {
+        domainCount: domains.length,
+        domains: domains.join(', ')
+      });
+    }
 
     const engine = new CompanyEnrichmentEngine();
     const exporter = new MarkdownExporter();
 
     const inputs = domains.map(d => ({ domain: d.trim() }));
-    const results = await Sentry.startSpan({ name: 'enrichBatch', op: 'enrichment', attributes: { domainCount: domains.length } }, () => {
-      return engine.enrichBatch(inputs);
-    });
+    const results = await engine.enrichBatch(inputs);
 
     const successfulData = results.filter(r => r.success && r.data).map(r => r.data!);
     let exportPath = '';
 
     if (successfulData.length === 1) {
-      exportPath = await Sentry.startSpan({ name: 'exportSingle', op: 'export' }, () => exporter.exportSingle(successfulData[0]));
+      exportPath = await exporter.exportSingle(successfulData[0]);
     } else if (successfulData.length > 1) {
-      exportPath = await Sentry.startSpan({ name: 'exportBatch', op: 'export' }, () => exporter.exportBatch(successfulData));
+      exportPath = await exporter.exportBatch(successfulData);
     }
 
     let markdown = '';
@@ -67,8 +72,13 @@ app.post('/api/enrich', async (req, res) => {
       markdown = await fs.readFile(exportPath, 'utf-8');
     }
 
-    const successCount = results.filter(r => r.success).length;
-    Sentry.logger.info('Enrichment request completed', { successCount, failCount: domains.length - successCount });
+    if (process.env.SENTRY_DSN) {
+      const successCount = results.filter(r => r.success).length;
+      Sentry.getCurrentScope().setContext('enrichment_result', {
+        successCount,
+        failCount: domains.length - successCount
+      });
+    }
 
     res.json({
       results: results.map((r, i) => ({
@@ -83,13 +93,17 @@ app.post('/api/enrich', async (req, res) => {
       exportPath,
     });
   } catch (error) {
-    Sentry.captureException(error);
-    Sentry.logger.error('Enrichment request failed', { error: error instanceof Error ? error.message : 'Unknown error' });
+    if (process.env.SENTRY_DSN) {
+      Sentry.captureException(error);
+    }
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
 
-Sentry.setupExpressErrorHandler(app);
+// Setup Sentry error handler (only if configured)
+if (process.env.SENTRY_DSN) {
+  Sentry.setupExpressErrorHandler(app);
+}
 
 app.listen(PORT, () => {
   const hasKey = !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_api_key_here';
@@ -232,11 +246,10 @@ textarea::placeholder{color:var(--text3)}
   <div class="card"><div class="card-body">
     <div class="input-group">
       <label>Domains <span class="hint">one per line &middot; Cmd+Enter to run</span></label>
-      <textarea id="inp" placeholder="stripe.com&#10;anthropic.com&#10;linear.app" spellcheck="false"></textarea>
+      <textarea id="inp" spellcheck="false"></textarea>
     </div>
     <div class="actions">
       <button id="go" class="btn btn-p" onclick="run()">Enrich</button>
-      <button class="btn btn-s" onclick="example()">Load Example</button>
       <div class="status" id="st"></div>
     </div>
   </div></div>
@@ -245,8 +258,6 @@ textarea::placeholder{color:var(--text3)}
 </div>
 <script>
 fetch('/api/health').then(r=>r.json()).then(d=>{if(!d.apiKeyConfigured){document.getElementById('warn').style.display='flex';document.getElementById('go').disabled=true}});
-
-function example(){document.getElementById('inp').value='stripe.com\\nanthropic.com\\nlinear.app';document.getElementById('inp').focus()}
 
 async function run(){
   var inp=document.getElementById('inp'),btn=document.getElementById('go'),st=document.getElementById('st'),res=document.getElementById('res'),pre=document.getElementById('pre');
