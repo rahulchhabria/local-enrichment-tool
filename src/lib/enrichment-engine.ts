@@ -1,3 +1,4 @@
+import * as Sentry from '@sentry/node';
 import { anthropic } from '@ai-sdk/anthropic';
 import { generateObject } from 'ai';
 import { z } from 'zod';
@@ -39,10 +40,17 @@ export class CompanyEnrichmentEngine {
    * Main enrichment function - takes company identifier and returns enriched data
    */
   async enrichCompany(input: CompanyEnrichmentInput): Promise<EnrichmentResult> {
+    const identifier = input.companyName || input.domain || input.linkedinUrl || 'unknown';
+    return Sentry.startSpan({ name: 'enrichCompany', op: 'enrichment.company', attributes: { domain: input.domain || '', company: identifier } }, () => this._enrichCompany(input));
+  }
+
+  private async _enrichCompany(input: CompanyEnrichmentInput): Promise<EnrichmentResult> {
     const startTime = Date.now();
+    const identifier = input.companyName || input.domain || input.linkedinUrl || 'unknown';
 
     try {
-      console.log(`Enriching company: ${input.companyName || input.domain || input.linkedinUrl}`);
+      Sentry.logger.info('Enriching company: %s', [identifier], { domain: input.domain || '' });
+      console.log(`Enriching company: ${identifier}`);
 
       // Step 0: If only company name provided, find domain
       if (!input.domain && input.companyName) {
@@ -65,7 +73,7 @@ export class CompanyEnrichmentEngine {
       // Fetch company website
       if (input.domain) {
         console.log(`  → Fetching website: ${input.domain}`);
-        const websiteData = await this.fetchWebsite(input.domain);
+        const websiteData = await Sentry.startSpan({ name: 'fetchWebsite', op: 'http.fetch', attributes: { domain: input.domain } }, () => this.fetchWebsite(input.domain!));
         websiteContent = websiteData.text;
         websiteHTML = websiteData.html;
         if (websiteContent) sources.push('company_website');
@@ -89,11 +97,15 @@ export class CompanyEnrichmentEngine {
       let githubData = null;
       if (input.domain) {
         const companyName = input.companyName || input.domain.split('.')[0];
-        const githubOrg = await this.githubFetcher.findOrgFromDomain(input.domain, companyName);
-        if (githubOrg) {
-          githubData = await this.githubFetcher.fetchOrgData(githubOrg);
-          if (githubData) sources.push('github');
-        }
+        githubData = await Sentry.startSpan({ name: 'fetchGitHub', op: 'enrichment.github', attributes: { domain: input.domain } }, async () => {
+          const githubOrg = await this.githubFetcher.findOrgFromDomain(input.domain!, companyName);
+          if (githubOrg) {
+            const data = await this.githubFetcher.fetchOrgData(githubOrg);
+            if (data) sources.push('github');
+            return data;
+          }
+          return null;
+        });
       }
 
       // Step 3: Fetch job postings and calculate hiring data
@@ -101,7 +113,7 @@ export class CompanyEnrichmentEngine {
       let htmlForTech = '';
       if (input.domain) {
         const companyName = input.companyName || input.domain.split('.')[0];
-        hiringData = await this.jobScraper.scrapeJobs(input.domain, companyName);
+        hiringData = await Sentry.startSpan({ name: 'scrapeJobs', op: 'enrichment.jobs', attributes: { domain: input.domain } }, () => this.jobScraper.scrapeJobs(input.domain!, companyName));
         if (hiringData.openPositions > 0) sources.push('job_boards');
 
         // Store HTML for tech detection - use raw HTML, not cleaned text!
@@ -112,7 +124,7 @@ export class CompanyEnrichmentEngine {
       let techStack = null;
       if (htmlForTech) {
         const url = input.domain?.startsWith('http') ? input.domain : `https://${input.domain}`;
-        techStack = await this.techDetector.detectTechStack(htmlForTech, url);
+        techStack = await Sentry.startSpan({ name: 'detectTechStack', op: 'enrichment.tech' }, () => this.techDetector.detectTechStack(htmlForTech, url));
 
         // Enhance with job posting tech mentions
         if (hiringData && hiringData.jobListings.length > 0) {
@@ -128,7 +140,7 @@ export class CompanyEnrichmentEngine {
       let mobileAppData = null;
       if (websiteHTML && input.domain) {
         console.log('  → Detecting mobile apps...');
-        mobileAppData = await this.mobileAppDetector.detectMobileApps(websiteHTML, input.domain);
+        mobileAppData = await Sentry.startSpan({ name: 'detectMobileApps', op: 'enrichment.mobile' }, () => this.mobileAppDetector.detectMobileApps(websiteHTML, input.domain!));
         if (mobileAppData.allApps.length > 0) {
           console.log(`    ✓ Found ${mobileAppData.allApps.length} mobile app(s)`);
           if (mobileAppData.hasIosApp) console.log(`      • iOS app detected`);
@@ -192,7 +204,7 @@ export class CompanyEnrichmentEngine {
 
       // Step 6: Use AI to extract and structure all the data
       console.log(`  → Analyzing data with AI...`);
-      const enrichedData = await this.extractWithAI(
+      const enrichedData = await Sentry.startSpan({ name: 'extractWithAI', op: 'ai.generate', attributes: { sourceCount: sources.length } }, () => this.extractWithAI(
         input,
         websiteContent,
         linkedinContent,
@@ -204,19 +216,24 @@ export class CompanyEnrichmentEngine {
         socialLinks,
         mobileAppData,
         headcountData
-      );
+      ));
 
       const processingTimeMs = Date.now() - startTime;
+      const confidence = this.calculateConfidence(enrichedData, sources);
+
+      Sentry.logger.info('Enrichment completed for %s', [identifier], { confidence, processingTimeMs, sourceCount: sources.length });
 
       return {
         success: true,
         data: enrichedData,
-        confidence: this.calculateConfidence(enrichedData, sources),
+        confidence,
         processingTimeMs,
       };
     } catch (error) {
       const processingTimeMs = Date.now() - startTime;
       console.error('Enrichment error:', error);
+      Sentry.captureException(error);
+      Sentry.logger.error('Enrichment failed for %s', [identifier], { error: error instanceof Error ? error.message : 'Unknown', processingTimeMs });
 
       return {
         success: false,
@@ -836,6 +853,7 @@ If information is not available, omit the field.
    * Batch enrich multiple companies
    */
   async enrichBatch(inputs: CompanyEnrichmentInput[]): Promise<EnrichmentResult[]> {
+    Sentry.logger.info('Batch enriching %s companies', [inputs.length]);
     console.log(`Batch enriching ${inputs.length} companies...`);
     const results = await Promise.all(
       inputs.map(input => this.enrichCompany(input))

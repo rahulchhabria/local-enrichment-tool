@@ -7,6 +7,7 @@ Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: process.env.NODE_ENV || 'development',
   tracesSampleRate: 1.0,
+  enableLogs: true,
 });
 
 import express from 'express';
@@ -42,25 +43,32 @@ app.post('/api/enrich', async (req, res) => {
   }
 
   try {
+    Sentry.logger.info('Enrichment request received', { domainCount: domains.length, domains: domains.join(', ') });
+
     const engine = new CompanyEnrichmentEngine();
     const exporter = new MarkdownExporter();
 
     const inputs = domains.map(d => ({ domain: d.trim() }));
-    const results = await engine.enrichBatch(inputs);
+    const results = await Sentry.startSpan({ name: 'enrichBatch', op: 'enrichment', attributes: { domainCount: domains.length } }, () => {
+      return engine.enrichBatch(inputs);
+    });
 
     const successfulData = results.filter(r => r.success && r.data).map(r => r.data!);
     let exportPath = '';
 
     if (successfulData.length === 1) {
-      exportPath = await exporter.exportSingle(successfulData[0]);
+      exportPath = await Sentry.startSpan({ name: 'exportSingle', op: 'export' }, () => exporter.exportSingle(successfulData[0]));
     } else if (successfulData.length > 1) {
-      exportPath = await exporter.exportBatch(successfulData);
+      exportPath = await Sentry.startSpan({ name: 'exportBatch', op: 'export' }, () => exporter.exportBatch(successfulData));
     }
 
     let markdown = '';
     if (exportPath) {
       markdown = await fs.readFile(exportPath, 'utf-8');
     }
+
+    const successCount = results.filter(r => r.success).length;
+    Sentry.logger.info('Enrichment request completed', { successCount, failCount: domains.length - successCount });
 
     res.json({
       results: results.map((r, i) => ({
@@ -76,6 +84,7 @@ app.post('/api/enrich', async (req, res) => {
     });
   } catch (error) {
     Sentry.captureException(error);
+    Sentry.logger.error('Enrichment request failed', { error: error instanceof Error ? error.message : 'Unknown error' });
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
@@ -100,6 +109,16 @@ const UI_HTML = /* html */ `<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Local Enrichment Tool</title>
+<script src="https://browser.sentry-cdn.com/10.38.0/bundle.tracing.replay.min.js" crossorigin="anonymous"></script>
+<script>
+Sentry.init({
+  dsn: "${process.env.SENTRY_DSN || ''}",
+  integrations: [Sentry.browserTracingIntegration(), Sentry.replayIntegration()],
+  tracesSampleRate: 1.0,
+  replaysSessionSampleRate: 1.0,
+  replaysOnErrorSampleRate: 1.0,
+});
+</script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 :root{
