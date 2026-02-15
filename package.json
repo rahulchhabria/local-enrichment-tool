@@ -19,6 +19,7 @@
   ],
   "dependencies": {
     "@ai-sdk/anthropic": "^1.0.0",
+    "@sentry/node": "^10.38.0",
     "ai": "^4.0.0",
     "axios": "^1.13.4",
     "cheerio": "^1.2.0",
