@@ -1,6 +1,14 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import * as Sentry from '@sentry/node';
+
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || 'development',
+  tracesSampleRate: 1.0,
+});
+
 import express from 'express';
 import { CompanyEnrichmentEngine } from './lib/enrichment-engine.js';
 import { MarkdownExporter } from './lib/markdown-exporter.js';
@@ -67,9 +75,12 @@ app.post('/api/enrich', async (req, res) => {
       exportPath,
     });
   } catch (error) {
+    Sentry.captureException(error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Unknown error' });
   }
 });
+
+Sentry.setupExpressErrorHandler(app);
 
 app.listen(PORT, () => {
   const hasKey = !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_api_key_here';
