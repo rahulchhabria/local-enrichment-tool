@@ -18,6 +18,7 @@ import { MarkdownExporter } from './lib/markdown-exporter.js';
 import fs from 'fs/promises';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
+const IS_ELECTRON = process.env.ELECTRON_MODE === 'true';
 
 const app = express();
 app.use(express.json());
@@ -107,11 +108,17 @@ if (process.env.SENTRY_DSN) {
 
 app.listen(PORT, () => {
   const hasKey = !!process.env.ANTHROPIC_API_KEY && process.env.ANTHROPIC_API_KEY !== 'your_anthropic_api_key_here';
-  console.log('');
-  console.log('  Local Enrichment Tool');
-  console.log(`  http://localhost:${PORT}`);
-  if (!hasKey) console.log('  \u26a0 Add ANTHROPIC_API_KEY to .env');
-  console.log('');
+
+  if (!IS_ELECTRON) {
+    console.log('');
+    console.log('  Local Enrichment Tool');
+    console.log(`  http://localhost:${PORT}`);
+    if (!hasKey) console.log('  \u26a0 Add ANTHROPIC_API_KEY to .env');
+    console.log('');
+  } else {
+    console.log(`[Server] Running on port ${PORT} (Electron mode)`);
+    if (!hasKey) console.log('[Server] \u26a0 Add ANTHROPIC_API_KEY to .env');
+  }
 });
 
 // ---------------------------------------------------------------------------

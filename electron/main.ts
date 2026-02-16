@@ -62,7 +62,7 @@ function startServer(): Promise<void> {
         console.log('[Electron] Server is ready');
         resolve();
       })
-      .catch((err) => {
+      .catch((err: Error) => {
         console.error('[Electron] Server failed to start:', err);
         reject(err);
       });

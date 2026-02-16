@@ -63,6 +63,45 @@ npm run enrich -- --file domains.txt
 
 Results are saved as `.md` files in the `./output/` directory.
 
+## Desktop App (Optional)
+
+Want a native macOS app instead of running in your browser?
+
+### Build the Desktop App
+
+```bash
+# Install Electron dependencies (first time only)
+npm install
+
+# Build the .app bundle
+npm run electron:build
+
+# Or build a universal binary (Intel + Apple Silicon)
+npm run electron:dist
+```
+
+The app will be in `release/mac/` - drag it to your Applications folder.
+
+### Run in Development Mode
+
+```bash
+npm run electron:dev
+```
+
+This builds the project and launches the Electron app with DevTools enabled.
+
+### How It Works
+
+The desktop app:
+- Runs the same Express server as the web version
+- Opens it in a native macOS window
+- Uses your existing `.env` configuration
+- Exports files to the same `output/` directory
+
+**Note:** The web server (`npm run dev`) still works exactly as before - Electron is purely optional.
+
+📖 **Learn more:** [ELECTRON.md](./ELECTRON.md) for detailed Electron documentation.
+
 ## Configuration
 
 Copy `.env.example` to `.env` and set:

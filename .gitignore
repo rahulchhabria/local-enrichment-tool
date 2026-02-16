@@ -42,3 +42,12 @@ coverage/
 # Temp files
 tmp/
 temp/
+
+# Electron build output
+release/
+dist/electron/
+
+# macOS build artifacts
+*.dmg
+*.app
+*.zip
